@@ -53,7 +53,7 @@ FileFilter::FileFilter(Session *session) :
         wordCharacters.append(QLatin1Char('-'));
     }
 
-    static auto re = QRegularExpression(
+    static const auto re = QRegularExpression(
         /* First part of the regexp means 'strings with spaces and starting with single quotes'
          * Second part means "Strings with double quotes"
          * Last part means "Everything else plus some special chars
@@ -63,9 +63,15 @@ FileFilter::FileFilter(Session *session) :
          */
             QLatin1String("'[^']+'")             // Matches everything between single quotes.
             + QStringLiteral(R"RX(|"[^"]+")RX")      // Matches everything inside double quotes
-            + QStringLiteral(R"RX(|[\p{L}\w%1]+)RX").arg(wordCharacters) // matches a contiguous line of alphanumeric characters plus some special ones defined in the profile.
-        ,
-        QRegularExpression::DontCaptureOption);
+            // Matches a contiguous line of alphanumeric characters plus some special ones
+            // defined in the profile. With a special case for strings starting with '/' which
+            // denotes a path on Linux. Takes into account line numbers, e.g. 'grep -n' output
+            // and compiler output on errors e.g. 'path/to/file:xyz'
+            + QStringLiteral(R"RX(|(^| )[/\p{L}\w%1]+(:\d+:)?(\d+:)?)RX").arg(wordCharacters),
+        QRegularExpression::DontCaptureOption
+        | QRegularExpression::MultilineOption // this is needed so that '^' matches the beginning of
+                                              // each line in the text
+    );
     setRegExp(re);
 }
 
@@ -90,17 +96,22 @@ QSharedPointer<HotSpot> FileFilter::newHotSpot(int startLine, int startColumn, i
         filename.chop(1);
     }
 
-    // Return nullptr if it's not:
-    // <current dir>/filename
-    // <current dir>/childDir/filename
-    auto match = std::find_if(_currentDirContents.cbegin(), _currentDirContents.cend(),
-                              [filename](const QString &s) { return filename.startsWith(s); });
+    const bool absolute = filename.startsWith(QLatin1Char('/'));
+    if (!absolute) {
+        // Return nullptr if it's not:
+        // <current dir>/filename
+        // <current dir>/childDir/filename
+        auto match = std::find_if(_currentDirContents.cbegin(), _currentDirContents.cend(),
+                                [filename](const QString &s) { return filename.startsWith(s); });
 
-    if (match == _currentDirContents.cend()) {
-        return nullptr;
+        // Create a hotspot if the match starts with '/', which denotes an absolute path
+        if (match == _currentDirContents.cend()) {
+            return nullptr;
+        }
     }
 
-    return QSharedPointer<HotSpot>(new FileFilterHotSpot(startLine, startColumn, endLine, endColumn, capturedTexts, _dirPath + filename));
+    return QSharedPointer<HotSpot>(new FileFilterHotSpot(startLine, startColumn, endLine, endColumn, capturedTexts,
+                                                         !absolute ? _dirPath + filename : filename));
 }
 
 void FileFilter::process()

@@ -28,6 +28,8 @@
 #include <QTimer>
 #include <QToolTip>
 
+#include <KIO/CommandLauncherJob>
+#include <KIO/JobUiDelegate>
 #include <KRun>
 #include <KLocalizedString>
 #include <KFileItemListProperties>
@@ -48,6 +50,28 @@ FileFilterHotSpot::FileFilterHotSpot(int startLine, int startColumn, int endLine
 
 void FileFilterHotSpot::activate(QObject *)
 {
+    QString editorCmd(QStringLiteral("/usr/bin/kate --line LINE_NUMBER --column COLUMN_NUMBER"));
+    // Output of e.g.:
+    // grep with line numbers: "path/to/some/file:123:"
+    // or compiler errors with line/column numbers: "/path/to/file.cpp:123:123:"
+    const auto re(QRegularExpression(QStringLiteral(R"foo((:([0-9]+):)(([0-9]+):)?$)foo")));
+    const QRegularExpressionMatch match = re.match(_filePath);
+    if (match.hasMatch()) {
+        editorCmd.replace(QLatin1String("LINE_NUMBER"), match.captured(2));
+
+        QString col = match.captured(4);
+        if (col.isEmpty()) {
+            col = QLatin1Char('0');
+        }
+        editorCmd.replace(QLatin1String("COLUMN_NUMBER"), col);
+
+        editorCmd += QLatin1Char(' ') + _filePath.left(match.capturedStart(0));
+        auto *job = new KIO::CommandLauncherJob(editorCmd);
+        job->setUiDelegate(new KDialogJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, QApplication::activeWindow()));
+        job->start();
+        return;
+    }
+
     new KRun(QUrl::fromLocalFile(_filePath), QApplication::activeWindow());
 }
 
